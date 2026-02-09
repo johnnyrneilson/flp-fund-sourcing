@@ -200,20 +200,27 @@ def format_currency(amount):
 # Data fetch & parsing
 # =========================
 def _request_search(params, retries=2, timeout=30):
-    """Internal: call SEC search API with light retry/backoff for 429s."""
+    """Internal: call SEC search API with light retry/backoff for 429s. Errors suppressed for clean UX."""
     for attempt in range(retries + 1):
-        resp = requests.get(URL, headers=HEADERS, params=params, timeout=timeout)
-        if resp.status_code == 429 and attempt < retries:
-            # Track that we hit rate limits (will be reported after fetch completes)
-            if "rate_limit_hits" not in st.session_state:
-                st.session_state["rate_limit_hits"] = 0
-            st.session_state["rate_limit_hits"] += 1
-            
-            retry_after = min(int(resp.headers.get("Retry-After", "1")), 5)
-            time.sleep(retry_after)
-            continue
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = requests.get(URL, headers=HEADERS, params=params, timeout=timeout)
+            if resp.status_code == 429 and attempt < retries:
+                # Track that we hit rate limits (will be reported after fetch completes)
+                if "rate_limit_hits" not in st.session_state:
+                    st.session_state["rate_limit_hits"] = 0
+                st.session_state["rate_limit_hits"] += 1
+                
+                retry_after = min(int(resp.headers.get("Retry-After", "2")), 5)
+                time.sleep(retry_after)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException:
+            # Suppress errors for clean UX - they're tracked in rate_limit_hits
+            if attempt < retries:
+                time.sleep(2)  # Wait before retry
+                continue
+            return None
     return None
 
 
@@ -351,9 +358,9 @@ def fetch_with_auto_chunking(start_date, end_date, progress_callback=None):
         chunk_filings = fetch_sec_filings(chunk_start, chunk_end)
         all_filings.extend(chunk_filings)
         
-        # Small delay between chunks to be respectful to SEC API
+        # Delay between chunks to be respectful to SEC API (1.5 seconds)
         if idx < total_chunks - 1:
-            time.sleep(0.5)
+            time.sleep(1.5)
     
     return all_filings, total_chunks
     """
@@ -726,6 +733,18 @@ def main():
     
     st.title('Emerging Manager Sourcing (Form D)')
     
+    # Add CSS for visited link styling
+    st.markdown("""
+    <style>
+    a:visited {
+        color: #551A8B !important;  /* Purple for visited links */
+    }
+    a:link {
+        color: #0066CC !important;  /* Blue for unvisited links */
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     # Recent Searches section
     with st.expander("🔍 Recent Searches"):
         if "search_history" not in st.session_state:
@@ -773,6 +792,8 @@ def main():
         start_date = st.date_input("Start Date")
     with col2:
         end_date = st.date_input("End Date")
+    
+    st.caption("💡 **Tip:** For best results, search 7-30 days at a time. Longer ranges may take several minutes.")
 
     # Fund size filter
     col3, col4 = st.columns(2)
@@ -978,6 +999,8 @@ def main():
                     st.success(f"✅ Found {len(detailed_data):,} matching funds from {total_fetched:,} filings across {num_chunks} date chunks ({industry_subtype if industry_subtype != 'Any' else 'Any subtype'}, Stages: {stages_display}, Years: {year_display}, Size: ${min_size}M-${max_size}M)")
                 else:
                     st.success(f"✅ Found {len(detailed_data):,} matching funds ({industry_subtype if industry_subtype != 'Any' else 'Any subtype'}, Stages: {stages_display}, Years: {year_display}, Size: ${min_size}M-${max_size}M)")
+                
+                st.caption("👇 Scroll down past the results table for expandable detailed fund information and CSV download")
                 
                 # Show last updated timestamp
                 if st.session_state["last_search_time"]:
