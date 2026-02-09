@@ -199,15 +199,15 @@ def format_currency(amount):
 # =========================
 # Data fetch & parsing
 # =========================
-def _request_search(params, retries=2, timeout=30, show_rate_limit_msg=True):
+def _request_search(params, retries=2, timeout=30):
     """Internal: call SEC search API with light retry/backoff for 429s."""
     for attempt in range(retries + 1):
         resp = requests.get(URL, headers=HEADERS, params=params, timeout=timeout)
         if resp.status_code == 429 and attempt < retries:
-            # Show friendly one-time message about rate limiting
-            if show_rate_limit_msg and "rate_limit_shown" not in st.session_state:
-                st.info("ℹ️ Processing large date range - SEC requesting slower queries. Automatically adjusting... (this is normal)")
-                st.session_state["rate_limit_shown"] = True
+            # Track that we hit rate limits (will be reported after fetch completes)
+            if "rate_limit_hits" not in st.session_state:
+                st.session_state["rate_limit_hits"] = 0
+            st.session_state["rate_limit_hits"] += 1
             
             retry_after = min(int(resp.headers.get("Retry-After", "1")), 5)
             time.sleep(retry_after)
@@ -850,9 +850,8 @@ def main():
 
     # Combined search and filter
     if search_button:
-        # Reset rate limit message flag for this search
-        if "rate_limit_shown" in st.session_state:
-            del st.session_state["rate_limit_shown"]
+        # Reset rate limit counter for this search
+        st.session_state["rate_limit_hits"] = 0
         
         # Progress tracking
         progress_placeholder = st.empty()
@@ -868,6 +867,10 @@ def main():
         
         progress_placeholder.empty()
         chunk_status.empty()
+        
+        # Show rate limit message if we hit it
+        if st.session_state.get("rate_limit_hits", 0) > 0:
+            st.info("ℹ️ Large date range detected - SEC requested slower queries. Automatically adjusted speed (this is normal).")
         
         if filings:
             total_fetched = len(filings)
