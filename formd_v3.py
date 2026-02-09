@@ -1024,19 +1024,41 @@ def main():
                 # Display with HTML rendering for clickable links
                 st.write(main_df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
                 
-                # Store for CSV download
-                full_df = pd.DataFrame(detailed_data)
-                st.session_state["detailed_results"] = full_df
-
-                # CSV Download button at top
-                csv_data = convert_df_to_csv(full_df)
-                filename = f"formd_results_{start_date}_{end_date}.csv"
-                st.download_button(
-                    label="📥 Download Complete Results as CSV",
-                    data=csv_data,
-                    file_name=filename,
-                    mime="text/csv"
-                )
+                # Store both dataframes for CSV downloads
+                st.session_state["summary_csv"] = main_df  # Summary table only
+                st.session_state["detailed_csv"] = pd.DataFrame(detailed_data)  # Full details
+                
+                # Two CSV download options
+                st.write("---")
+                st.subheader("📥 Download Options")
+                
+                col_download1, col_download2 = st.columns(2)
+                
+                with col_download1:
+                    st.markdown("**📊 Quick Summary CSV**")
+                    st.caption("Main table only (Fund Name, Stage, Size, etc.)")
+                    summary_csv = convert_df_to_csv(main_df)
+                    filename_summary = f"formd_summary_{start_date}_{end_date}.csv"
+                    st.download_button(
+                        label="Download Summary CSV",
+                        data=summary_csv,
+                        file_name=filename_summary,
+                        mime="text/csv",
+                        key="download_summary_top"
+                    )
+                
+                with col_download2:
+                    st.markdown("**📋 Complete Details CSV**")
+                    st.caption("All contact & financial data")
+                    full_csv = convert_df_to_csv(st.session_state["detailed_csv"])
+                    filename_full = f"formd_complete_{start_date}_{end_date}.csv"
+                    st.download_button(
+                        label="Download Complete CSV",
+                        data=full_csv,
+                        file_name=filename_full,
+                        mime="text/csv",
+                        key="download_full_top"
+                    )
                 
                 # Expandable details
                 st.write("---")
@@ -1046,14 +1068,33 @@ def main():
                     with st.expander(f"🔍 {row_data['Fund Name']} - {row_data['Fund Stage']} ({row_data['Investment Type']})"):
                         st.markdown(create_expandable_section(row_data))
                 
-                # CSV Download button at bottom too
-                st.download_button(
-                    label="📥 Download Complete Results as CSV",
-                    data=csv_data,
-                    file_name=filename,
-                    mime="text/csv",
-                    key="download_bottom"
-                )
+                # CSV Download buttons at bottom (matching top)
+                st.write("---")
+                st.subheader("📥 Download Options")
+                
+                col_download_bottom1, col_download_bottom2 = st.columns(2)
+                
+                with col_download_bottom1:
+                    st.markdown("**📊 Quick Summary CSV**")
+                    st.caption("Main table only")
+                    st.download_button(
+                        label="Download Summary CSV",
+                        data=summary_csv,
+                        file_name=filename_summary,
+                        mime="text/csv",
+                        key="download_summary_bottom"
+                    )
+                
+                with col_download_bottom2:
+                    st.markdown("**📋 Complete Details CSV**")
+                    st.caption("All contact & financial data")
+                    st.download_button(
+                        label="Download Complete CSV",
+                        data=full_csv,
+                        file_name=filename_full,
+                        mime="text/csv",
+                        key="download_full_bottom"
+                    )
             else:
                 st.warning(f"No filings matched the selected filters out of {total_fetched:,} filings searched.")
         else:
