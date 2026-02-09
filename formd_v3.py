@@ -702,128 +702,128 @@ def main():
 
             # Convert selected years to tuple or None
             allowed_years = tuple(selected_years) if selected_years else None
-                
-                # Convert fund sizes to dollars
-                min_fund_size = min_size * 1_000_000
-                max_fund_size = max_size * 1_000_000
+            
+            # Convert fund sizes to dollars
+            min_fund_size = min_size * 1_000_000
+            max_fund_size = max_size * 1_000_000
 
-                progress_bar = st.progress(0)
-                status_text = st.empty()
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            total_filings = len(filings)
+            
+            for idx, row in enumerate(filings):
+                # Update progress
+                progress = (idx + 1) / total_filings
+                progress_bar.progress(progress)
+                status_text.text(f"Processing filing {idx + 1} of {total_filings}...")
                 
-                total_filings = len(filings)
-                
-                for idx, row in enumerate(filings):
-                    # Update progress
-                    progress = (idx + 1) / total_filings
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processing filing {idx + 1} of {total_filings}...")
+                cik = row.get("CIK", "")
+                if not cik:
+                    continue
+                acc = (row.get("Accession Number", "") or "").replace("-", "")
+                primary_doc = row.get("Primary Document") or f"{acc}.txt"
+                url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{primary_doc}"
+
+                filing_data = get_formd_details(
+                    url,
+                    required_industry_group=industry_group_fixed,
+                    required_subtype=subtype_filter,
+                    allowed_years=allowed_years,
+                    allowed_stages=allowed_stages if allowed_stages else None,
+                    min_fund_size=min_fund_size,
+                    max_fund_size=max_fund_size
+                )
+                if filing_data:
+                    # Apply Utah filter if enabled
+                    if utah_only:
+                        location = filing_data.get("Location", "")
+                        if "UT" not in location.upper() and "UTAH" not in location.upper():
+                            continue  # Skip non-Utah funds
                     
-                    cik = row.get("CIK", "")
-                    if not cik:
-                        continue
-                    acc = (row.get("Accession Number", "") or "").replace("-", "")
-                    primary_doc = row.get("Primary Document") or f"{acc}.txt"
+                    # Add technical fields for expandable section
+                    filing_data["CIK"] = cik
+                    filing_data["Accession Number"] = row.get("Accession Number", "")
+                    filing_data["Primary Document"] = primary_doc
+                    filing_data["Form D Filing"] = row.get("Form D Filing", "")
+                    
+                    detailed_data.append(filing_data)
+
+            progress_bar.empty()
+            status_text.empty()
+
+            if detailed_data:
+                # Store timestamp
+                st.session_state["last_search_time"] = datetime.now()
+                
+                year_display = ", ".join(selected_years) if selected_years else "All years"
+                stages_display = ", ".join([s if s != "N/A" else "N/A (Unknown)" for s in allowed_stages]) if allowed_stages else "All stages"
+                st.success(f"✅ Found {len(detailed_data):,} matching funds ({industry_subtype if industry_subtype != 'Any' else 'Any subtype'}, Stages: {stages_display}, Years: {year_display}, Size: ${min_size}M-${max_size}M)")
+                
+                # Show last updated timestamp
+                if st.session_state["last_search_time"]:
+                    # Convert to Mountain Time
+                    utc_time = st.session_state["last_search_time"]
+                    mountain = pytz.timezone('America/Denver')
+                    utc_time = pytz.utc.localize(utc_time) if utc_time.tzinfo is None else utc_time
+                    mountain_time = utc_time.astimezone(mountain)
+                    timestamp = mountain_time.strftime("%m/%d/%Y at %I:%M %p MST")
+                    st.caption(f"Last Updated: {timestamp}")
+                
+                # Create main view DataFrame
+                main_df = create_main_view_df(detailed_data)
+                
+                # Add SEC Form D links to Fund Name column
+                def make_clickable(row_data):
+                    name = row_data['Fund Name']
+                    cik = row_data.get('CIK', '')
+                    acc = row_data.get('Accession Number', '').replace("-", "")
+                    primary_doc = row_data.get('Primary Document', f"{acc}.txt")
                     url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{primary_doc}"
+                    return f'<a href="{url}" target="_blank">{name}</a>'
+                
+                # Create full dataframe for linking
+                full_df_with_tech = pd.DataFrame(detailed_data)
+                main_df_display = main_df.copy()
+                main_df_display['Fund Name'] = full_df_with_tech.apply(make_clickable, axis=1)
+                
+                # Display with HTML rendering for clickable links
+                st.write(main_df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
+                
+                # Store for CSV download
+                full_df = pd.DataFrame(detailed_data)
+                st.session_state["detailed_results"] = full_df
 
-                    filing_data = get_formd_details(
-                        url,
-                        required_industry_group=industry_group_fixed,
-                        required_subtype=subtype_filter,
-                        allowed_years=allowed_years,
-                        allowed_stages=allowed_stages if allowed_stages else None,
-                        min_fund_size=min_fund_size,
-                        max_fund_size=max_fund_size
-                    )
-                    if filing_data:
-                        # Apply Utah filter if enabled
-                        if utah_only:
-                            location = filing_data.get("Location", "")
-                            if "UT" not in location.upper() and "UTAH" not in location.upper():
-                                continue  # Skip non-Utah funds
-                        
-                        # Add technical fields for expandable section
-                        filing_data["CIK"] = cik
-                        filing_data["Accession Number"] = row.get("Accession Number", "")
-                        filing_data["Primary Document"] = primary_doc
-                        filing_data["Form D Filing"] = row.get("Form D Filing", "")
-                        
-                        detailed_data.append(filing_data)
-
-                progress_bar.empty()
-                status_text.empty()
-
-                if detailed_data:
-                    # Store timestamp
-                    st.session_state["last_search_time"] = datetime.now()
-                    
-                    year_display = ", ".join(selected_years) if selected_years else "All years"
-                    stages_display = ", ".join([s if s != "N/A" else "N/A (Unknown)" for s in allowed_stages]) if allowed_stages else "All stages"
-                    st.success(f"✅ Found {len(detailed_data):,} matching funds ({industry_subtype if industry_subtype != 'Any' else 'Any subtype'}, Stages: {stages_display}, Years: {year_display}, Size: ${min_size}M-${max_size}M)")
-                    
-                    # Show last updated timestamp
-                    if st.session_state["last_search_time"]:
-                        # Convert to Mountain Time
-                        utc_time = st.session_state["last_search_time"]
-                        mountain = pytz.timezone('America/Denver')
-                        utc_time = pytz.utc.localize(utc_time) if utc_time.tzinfo is None else utc_time
-                        mountain_time = utc_time.astimezone(mountain)
-                        timestamp = mountain_time.strftime("%m/%d/%Y at %I:%M %p MST")
-                        st.caption(f"Last Updated: {timestamp}")
-                    
-                    # Create main view DataFrame
-                    main_df = create_main_view_df(detailed_data)
-                    
-                    # Add SEC Form D links to Fund Name column
-                    def make_clickable(row_data):
-                        name = row_data['Fund Name']
-                        cik = row_data.get('CIK', '')
-                        acc = row_data.get('Accession Number', '').replace("-", "")
-                        primary_doc = row_data.get('Primary Document', f"{acc}.txt")
-                        url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{primary_doc}"
-                        return f'<a href="{url}" target="_blank">{name}</a>'
-                    
-                    # Create full dataframe for linking
-                    full_df_with_tech = pd.DataFrame(detailed_data)
-                    main_df_display = main_df.copy()
-                    main_df_display['Fund Name'] = full_df_with_tech.apply(make_clickable, axis=1)
-                    
-                    # Display with HTML rendering for clickable links
-                    st.write(main_df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
-                    
-                    # Store for CSV download
-                    full_df = pd.DataFrame(detailed_data)
-                    st.session_state["detailed_results"] = full_df
-
-                    # CSV Download button at top
-                    csv_data = convert_df_to_csv(full_df)
-                    filename = f"formd_results_{start_date}_{end_date}.csv"
-                    st.download_button(
-                        label="📥 Download Complete Results as CSV",
-                        data=csv_data,
-                        file_name=filename,
-                        mime="text/csv"
-                    )
-                    
-                    # Expandable details
-                    st.write("---")
-                    st.subheader("📂 Detailed Fund Information")
-                    
-                    for idx, row_data in enumerate(detailed_data):
-                        with st.expander(f"🔍 {row_data['Fund Name']} - {row_data['Fund Stage']} ({row_data['Investment Type']})"):
-                            st.markdown(create_expandable_section(row_data))
-                    
-                    # CSV Download button at bottom too
-                    st.download_button(
-                        label="📥 Download Complete Results as CSV",
-                        data=csv_data,
-                        file_name=filename,
-                        mime="text/csv",
-                        key="download_bottom"
-                    )
-                else:
-                    st.warning(f"No filings matched the selected filters out of {total_fetched:,} filings searched.")
+                # CSV Download button at top
+                csv_data = convert_df_to_csv(full_df)
+                filename = f"formd_results_{start_date}_{end_date}.csv"
+                st.download_button(
+                    label="📥 Download Complete Results as CSV",
+                    data=csv_data,
+                    file_name=filename,
+                    mime="text/csv"
+                )
+                
+                # Expandable details
+                st.write("---")
+                st.subheader("📂 Detailed Fund Information")
+                
+                for idx, row_data in enumerate(detailed_data):
+                    with st.expander(f"🔍 {row_data['Fund Name']} - {row_data['Fund Stage']} ({row_data['Investment Type']})"):
+                        st.markdown(create_expandable_section(row_data))
+                
+                # CSV Download button at bottom too
+                st.download_button(
+                    label="📥 Download Complete Results as CSV",
+                    data=csv_data,
+                    file_name=filename,
+                    mime="text/csv",
+                    key="download_bottom"
+                )
             else:
-                st.write(f"No filings found for {start_date} to {end_date}, or an error occurred.")
+                st.warning(f"No filings matched the selected filters out of {total_fetched:,} filings searched.")
+        else:
+            st.write(f"No filings found for {start_date} to {end_date}, or an error occurred.")
 
 if __name__ == "__main__":
     main()
