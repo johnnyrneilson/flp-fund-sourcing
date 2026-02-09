@@ -692,16 +692,16 @@ def main():
             
             detailed_data = []
 
-                # Map "Private Credit (Keyword Detection)" to "Other Investment Fund" for SEC filter
-                if industry_subtype == "Any":
-                    subtype_filter = None
-                elif industry_subtype == "Private Credit (Keyword Detection)":
-                    subtype_filter = "Other Investment Fund"
-                else:
-                    subtype_filter = industry_subtype
+            # Map "Private Credit (Keyword Detection)" to "Other Investment Fund" for SEC filter
+            if industry_subtype == "Any":
+                subtype_filter = None
+            elif industry_subtype == "Private Credit (Keyword Detection)":
+                subtype_filter = "Other Investment Fund"
+            else:
+                subtype_filter = industry_subtype
 
-                # Convert selected years to tuple or None
-                allowed_years = tuple(selected_years) if selected_years else None
+            # Convert selected years to tuple or None
+            allowed_years = tuple(selected_years) if selected_years else None
                 
                 # Convert fund sizes to dollars
                 min_fund_size = min_size * 1_000_000
