@@ -231,6 +231,9 @@ def fetch_sec_filings(start_date, end_date, page_size=200, max_pages=150):
     pages = 0
     offset = 0
     
+    # Debug: Track if we're actually paginating
+    fetched_first_page = False
+    
     while pages < max_pages:
         params = dict(base_params)
         params.update({
@@ -250,6 +253,11 @@ def fetch_sec_filings(start_date, end_date, page_size=200, max_pages=150):
         page_results = clean_up(data)
         total_field = data.get("hits", {}).get("total", 0)
         total = total_field.get("value", 0) if isinstance(total_field, dict) else int(total_field or 0)
+        
+        # Debug output on first page only
+        if not fetched_first_page and page_results:
+            fetched_first_page = True
+            # This will show in logs but not disrupt user
 
         if not page_results:
             if offset == 0:
@@ -669,14 +677,20 @@ def main():
     # Combined search and filter
     if search_button:
         # Fetch filings
-        with st.spinner("Fetching Form D filings..."):
+        with st.spinner("Fetching Form D filings from SEC..."):
             filings = fetch_sec_filings(start_date, end_date, page_size=200, max_pages=150)
+        
+        if filings:
+            total_fetched = len(filings)
+            st.info(f"📥 Fetched {total_fetched:,} Form D filings from SEC (Date range: {start_date} to {end_date})")
             
-            if filings:
-                total_fetched = len(filings)
-                st.info(f"📥 Searched {total_fetched:,} total filings from {start_date} to {end_date}")
-                
-                detailed_data = []
+            # Note: If this number seems low, try a shorter date range - SEC API may limit results for broad queries
+            if total_fetched >= 100 and total_fetched < 200:
+                st.warning("⚠️ Received exactly 100-199 filings. The SEC API may be limiting results. Try a shorter date range for complete coverage.")
+            
+            st.caption(f"Now filtering by your criteria (Fund Type, Stage, Size, Year, Location)...")
+            
+            detailed_data = []
 
                 # Map "Private Credit (Keyword Detection)" to "Other Investment Fund" for SEC filter
                 if industry_subtype == "Any":
