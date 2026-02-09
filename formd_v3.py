@@ -512,136 +512,141 @@ def get_formd_details(
             response.raise_for_status()
             content = response.text
 
-        xml_match = re.search(r"<XML>(.*?)</XML>", content, re.DOTALL | re.IGNORECASE)
-        if not xml_match:
-            return None
-
-        xml_content = xml_match.group(1).strip()
-        xml_content = re.sub(r"[^\x09\x0A\x0D\x20-\x7F]", "", xml_content)
-
-        root = ET.fromstring(xml_content)
-        for elem in root.iter():
-            if '}' in elem.tag:
-                elem.tag = elem.tag.split('}', 1)[1]
-
-        def get(path):
-            el = root.find(path)
-            return el.text.strip() if el is not None and el.text else ""
-
-        # Year of Inc. filter
-        year_elem = root.find(".//primaryIssuer/yearOfInc/value")
-        if allowed_years:
-            if year_elem is None or (year_elem.text not in allowed_years):
+            xml_match = re.search(r"<XML>(.*?)</XML>", content, re.DOTALL | re.IGNORECASE)
+            if not xml_match:
                 return None
-            year_text = year_elem.text
-        else:
-            year_text = year_elem.text if year_elem is not None else ""
 
-        # Industry group & subtype
-        industry_group = get(".//offeringData/industryGroup/industryGroupType")
-        
-        if industry_group != "Pooled Investment Fund":
-            return None
-        
-        investment_subtype = get(".//offeringData/industryGroup/investmentFundInfo/investmentFundType")
-        
-        if required_industry_group and industry_group != required_industry_group:
-            return None
-        
-        # Apply subtype filter
-        if required_subtype:
-            if required_subtype == "Other Investment Fund":
-                if investment_subtype != "Other Investment Fund":
+            xml_content = xml_match.group(1).strip()
+            xml_content = re.sub(r"[^\x09\x0A\x0D\x20-\x7F]", "", xml_content)
+
+            root = ET.fromstring(xml_content)
+            for elem in root.iter():
+                if '}' in elem.tag:
+                    elem.tag = elem.tag.split('}', 1)[1]
+
+            def get(path):
+                el = root.find(path)
+                return el.text.strip() if el is not None and el.text else ""
+
+            # Year of Inc. filter
+            year_elem = root.find(".//primaryIssuer/yearOfInc/value")
+            if allowed_years:
+                if year_elem is None or (year_elem.text not in allowed_years):
                     return None
-            elif investment_subtype != required_subtype:
-                return None
+                year_text = year_elem.text
+            else:
+                year_text = year_elem.text if year_elem is not None else ""
 
-        # Fund size filter
-        total_offering = get(".//offeringData/offeringSalesAmounts/totalOfferingAmount")
-        try:
-            offering_amount = float(total_offering) if total_offering else 0
-            if offering_amount < min_fund_size or offering_amount > max_fund_size:
+            # Industry group & subtype
+            industry_group = get(".//offeringData/industryGroup/industryGroupType")
+            
+            if industry_group != "Pooled Investment Fund":
                 return None
-        except:
-            pass
+            
+            investment_subtype = get(".//offeringData/industryGroup/investmentFundInfo/investmentFundType")
+            
+            if required_industry_group and industry_group != required_industry_group:
+                return None
+            
+            # Apply subtype filter
+            if required_subtype:
+                if required_subtype == "Other Investment Fund":
+                    if investment_subtype != "Other Investment Fund":
+                        return None
+                elif investment_subtype != required_subtype:
+                    return None
 
-        entity_name = get(".//primaryIssuer/entityName")
-        
-        # Detect fund stage
-        fund_stage = detect_fund_stage(entity_name)
-        
-        # Fund stage filter
-        if allowed_stages and fund_stage not in allowed_stages:
+            # Fund size filter
+            total_offering = get(".//offeringData/offeringSalesAmounts/totalOfferingAmount")
+            try:
+                offering_amount = float(total_offering) if total_offering else 0
+                if offering_amount < min_fund_size or offering_amount > max_fund_size:
+                    return None
+            except:
+                pass
+
+            entity_name = get(".//primaryIssuer/entityName")
+            
+            # Detect fund stage
+            fund_stage = detect_fund_stage(entity_name)
+            
+            # Fund stage filter
+            if allowed_stages and fund_stage not in allowed_stages:
+                return None
+            
+            # Detect enhanced asset class
+            enhanced_type = detect_asset_class(entity_name, investment_subtype)
+
+            # Financial data
+            total_sold = get(".//offeringData/offeringSalesAmounts/totalAmountSold")
+            total_remaining = get(".//offeringData/offeringSalesAmounts/totalRemaining")
+            
+            # Calculate % raised
+            percent_raised = calculate_percent_raised(total_offering, total_sold)
+
+            # Date of first sale
+            sale_date_val = root.find(".//offeringData/typeOfFiling/dateOfFirstSale/value")
+            yet_to_occur = root.find(".//offeringData/typeOfFiling/dateOfFirstSale/yetToOccur")
+            
+            if yet_to_occur is not None:
+                date_first_sale = "Yet to Occur"
+            elif sale_date_val is not None and (sale_date_val.text or "").strip():
+                date_first_sale = sale_date_val.text.strip()
+            else:
+                date_first_sale = "Unknown"
+
+            # Sales compensation / Placement agent detection
+            sales_comp = get_sales_compensation(root)
+            using_placement_agent = "Yes" if sales_comp else "No"
+
+            city = get(".//primaryIssuer/issuerAddress/city")
+            state = get(".//primaryIssuer/issuerAddress/stateOrCountry")
+            location = f"{city}, {state}" if city and state else (city or state or "N/A")
+
+            data = {
+                # Main view columns (in order)
+                "Fund Name": entity_name,
+                "Fund Stage": fund_stage,
+                "Investment Type": enhanced_type,
+                "Fund Size": format_currency(total_offering),
+                "Amount Raised": format_currency(total_sold),
+                "% Raised": percent_raised,
+                "Date of First Sale": format_date(date_first_sale),
+                "Year of Incorporation": year_text,
+                "Location": location,
+                
+                # Expandable/Detail columns
+                "Name of Signer": get(".//offeringData/signatureBlock/signature/nameOfSigner"),
+                "Title": get(".//offeringData/signatureBlock/signature/signatureTitle"),
+                "Phone Number": get(".//primaryIssuer/issuerPhoneNumber"),
+                "Street": get(".//primaryIssuer/issuerAddress/street1"),
+                "City": city,
+                "State": state,
+                "Zip": get(".//primaryIssuer/issuerAddress/zipCode"),
+                "Total Investors": get(".//offeringData/investors/totalNumberAlreadyInvested"),
+                "Minimum Investment": format_currency(get(".//offeringData/minimumInvestmentAccepted")),
+                "Total Remaining": format_currency(total_remaining),
+                "Issuer Size": get(".//offeringData/issuerSize/revenueRange") or get(".//offeringData/issuerSize/aggregateNetAssetValueRange"),
+                "Using Placement Agent": using_placement_agent,
+                "Sales Compensation": sales_comp,
+                "Federal Exemptions": get(".//offeringData/federalExemptionsExclusions/item"),
+                
+                # Raw values for CSV and calculations
+                "Total Offering Amount (Raw)": total_offering,
+                "Total Amount Sold (Raw)": total_sold,
+                "Date of First Sale (Raw)": date_first_sale,
+            }
+
+            return data
+
+        except Exception:
+            # Silently skip failed filings (usually 429 rate limits or malformed XML)
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
             return None
-        
-        # Detect enhanced asset class
-        enhanced_type = detect_asset_class(entity_name, investment_subtype)
-
-        # Financial data
-        total_sold = get(".//offeringData/offeringSalesAmounts/totalAmountSold")
-        total_remaining = get(".//offeringData/offeringSalesAmounts/totalRemaining")
-        
-        # Calculate % raised
-        percent_raised = calculate_percent_raised(total_offering, total_sold)
-
-        # Date of first sale
-        sale_date_val = root.find(".//offeringData/typeOfFiling/dateOfFirstSale/value")
-        yet_to_occur = root.find(".//offeringData/typeOfFiling/dateOfFirstSale/yetToOccur")
-        
-        if yet_to_occur is not None:
-            date_first_sale = "Yet to Occur"
-        elif sale_date_val is not None and (sale_date_val.text or "").strip():
-            date_first_sale = sale_date_val.text.strip()
-        else:
-            date_first_sale = "Unknown"
-
-        # Sales compensation / Placement agent detection
-        sales_comp = get_sales_compensation(root)
-        using_placement_agent = "Yes" if sales_comp else "No"
-
-        city = get(".//primaryIssuer/issuerAddress/city")
-        state = get(".//primaryIssuer/issuerAddress/stateOrCountry")
-        location = f"{city}, {state}" if city and state else (city or state or "N/A")
-
-        data = {
-            # Main view columns (in order)
-            "Fund Name": entity_name,
-            "Fund Stage": fund_stage,
-            "Investment Type": enhanced_type,
-            "Fund Size": format_currency(total_offering),
-            "Amount Raised": format_currency(total_sold),
-            "% Raised": percent_raised,
-            "Date of First Sale": format_date(date_first_sale),
-            "Year of Incorporation": year_text,
-            "Location": location,
-            
-            # Expandable/Detail columns
-            "Name of Signer": get(".//offeringData/signatureBlock/signature/nameOfSigner"),
-            "Title": get(".//offeringData/signatureBlock/signature/signatureTitle"),
-            "Phone Number": get(".//primaryIssuer/issuerPhoneNumber"),
-            "Street": get(".//primaryIssuer/issuerAddress/street1"),
-            "City": city,
-            "State": state,
-            "Zip": get(".//primaryIssuer/issuerAddress/zipCode"),
-            "Total Investors": get(".//offeringData/investors/totalNumberAlreadyInvested"),
-            "Minimum Investment": format_currency(get(".//offeringData/minimumInvestmentAccepted")),
-            "Total Remaining": format_currency(total_remaining),
-            "Issuer Size": get(".//offeringData/issuerSize/revenueRange") or get(".//offeringData/issuerSize/aggregateNetAssetValueRange"),
-            "Using Placement Agent": using_placement_agent,
-            "Sales Compensation": sales_comp,
-            "Federal Exemptions": get(".//offeringData/federalExemptionsExclusions/item"),
-            
-            # Raw values for CSV and calculations
-            "Total Offering Amount (Raw)": total_offering,
-            "Total Amount Sold (Raw)": total_sold,
-            "Date of First Sale (Raw)": date_first_sale,
-        }
-
-        return data
-
-    except Exception:
-        # Silently skip failed filings (usually 429 rate limits or malformed XML)
-        return None
+    
+    return None  # If all retries failed
 
 
 def create_main_view_df(detailed_data):
