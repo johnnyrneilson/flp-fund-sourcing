@@ -496,10 +496,21 @@ def get_formd_details(
     max_fund_size=300_000_000
 ):
     """Parse primary_doc.xml and filter by industry subtype, year, fund stage, and fund size."""
-    try:
-        response = requests.get(formd_url, headers=DOC_HEADERS, timeout=30)
-        response.raise_for_status()
-        content = response.text
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(formd_url, headers=DOC_HEADERS, timeout=30)
+            
+            # Handle 429 rate limits with retry
+            if response.status_code == 429:
+                if attempt < max_retries - 1:
+                    time.sleep(2)  # Wait 2 seconds before retry
+                    continue
+                else:
+                    return None  # Silently skip after max retries
+            
+            response.raise_for_status()
+            content = response.text
 
         xml_match = re.search(r"<XML>(.*?)</XML>", content, re.DOTALL | re.IGNORECASE)
         if not xml_match:
@@ -628,8 +639,8 @@ def get_formd_details(
 
         return data
 
-    except Exception as e:
-        st.warning(f"⚠️ Error parsing filing: {e}")
+    except Exception:
+        # Silently skip failed filings (usually 429 rate limits or malformed XML)
         return None
 
 
@@ -947,6 +958,10 @@ def main():
                     min_fund_size=min_fund_size,
                     max_fund_size=max_fund_size
                 )
+                
+                # Small delay to avoid SEC rate limits when fetching details
+                time.sleep(0.1)
+                
                 if filing_data:
                     # Apply Utah filter if enabled
                     if utah_only:
