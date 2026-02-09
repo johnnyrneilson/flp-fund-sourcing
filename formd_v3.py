@@ -647,17 +647,12 @@ def main():
 
     industry_group_fixed = "Pooled Investment Fund"
     
-    # Fund Type dropdown with help text
-    col_fund_type, col_help = st.columns([3, 1])
-    with col_fund_type:
-        industry_subtype = st.selectbox(
-            "Fund Type",
-            ["Any", "Private Equity Fund", "Hedge Fund", "Venture Capital Fund", "Private Credit Fund", "Other Investment Fund"],
-            index=1
-        )
-    with col_help:
-        if industry_subtype == "Private Credit Fund":
-            st.markdown("ℹ️", help="Uses keyword detection to identify credit-focused funds filed as 'Other Investment Fund'")
+    # Fund Type dropdown
+    industry_subtype = st.selectbox(
+        "Fund Type",
+        ["Any", "Private Equity Fund", "Hedge Fund", "Venture Capital Fund", "Private Credit (Keyword Detection)", "Other Investment Fund"],
+        index=1
+    )
 
     # Buttons row
     col_btn1, col_btn2 = st.columns([1, 4])
@@ -683,10 +678,10 @@ def main():
                 
                 detailed_data = []
 
-                # Map "Private Credit Fund" to "Other Investment Fund" for SEC filter
+                # Map "Private Credit (Keyword Detection)" to "Other Investment Fund" for SEC filter
                 if industry_subtype == "Any":
                     subtype_filter = None
-                elif industry_subtype == "Private Credit Fund":
+                elif industry_subtype == "Private Credit (Keyword Detection)":
                     subtype_filter = "Other Investment Fund"
                 else:
                     subtype_filter = industry_subtype
