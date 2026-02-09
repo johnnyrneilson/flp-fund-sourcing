@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 import re
 import time
 from datetime import datetime
+import pytz
 from urllib.parse import quote
 
 
@@ -63,12 +64,12 @@ with st.sidebar:
 # Helper Functions
 # =========================
 def format_date(date_str):
-    """Format date string to 'Mon DD, YYYY' format."""
+    """Format date string to 'MM/DD/YYYY' format."""
     if not date_str or date_str in ["Yet to Occur", "Unknown"]:
         return date_str
     try:
         date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        return date_obj.strftime("%b %d, %Y")
+        return date_obj.strftime("%m/%d/%Y")
     except:
         return date_str
 
@@ -508,14 +509,17 @@ def create_main_view_df(detailed_data):
 
 def create_expandable_section(row):
     """Create expandable section for a single row with details."""
-    # Create Google search link for fund name
+    # Create SEC Form D link for fund name
     fund_name = row.get('Fund Name', '')
-    google_search_url = f"https://www.google.com/search?q={quote(fund_name)}"
+    cik = row.get('CIK', '')
+    acc = row.get('Accession Number', '').replace("-", "")
+    primary_doc = row.get('Primary Document', f"{acc}.txt")
+    sec_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{primary_doc}"
     
     # Build clean text output
     details = f"""
 **{fund_name}**  
-[Click to search Google]({google_search_url})
+[View SEC Form D Filing]({sec_url})
 
 ---
 
@@ -565,10 +569,15 @@ def main():
     except:
         pass  # If logo not found, continue without it
     
-    st.title('FLP - Emerging Manager Sourcing (Form D)')
+    st.title('Emerging Manager Sourcing (Form D)')
     
-    # User-Agent info (no box)
-    st.text(f"User-Agent: {YOUR_NAME} ({YOUR_EMAIL})")
+    # User-Agent collapsible info
+    with st.expander("ℹ️ SEC Compliance Information"):
+        st.write(f"""
+        **User-Agent:** {YOUR_NAME} ({YOUR_EMAIL})
+        
+        This identifier is sent to the SEC when we access Form D filings, as required by SEC guidelines.
+        """)
     st.markdown("---")
 
     if "filing_results" not in st.session_state:
@@ -592,7 +601,7 @@ def main():
 
     # Fund Stage filter (multi-select checkboxes)
     st.write("**Fund Stage:**")
-    col_stage1, col_stage2, col_stage3, col_stage4, col_stage5 = st.columns(5)
+    col_stage1, col_stage2, col_stage3, col_stage4, col_stage5, col_stage6 = st.columns(6)
     with col_stage1:
         stage_na = st.checkbox("N/A (Unknown)", value=True, key="stage_na")
     with col_stage2:
@@ -603,9 +612,13 @@ def main():
         stage_iii = st.checkbox("Fund III", value=True, key="stage_iii")
     with col_stage5:
         stage_iv = st.checkbox("Fund IV", value=False, key="stage_iv")
+    with col_stage6:
+        stage_v_plus = st.checkbox("Fund V+", value=False, key="stage_v_plus")
+    
+    st.caption("Note: N/A includes funds where stage couldn't be detected from name (often Fund I)")
     
     # Utah-based filter
-    utah_only = st.checkbox("Utah-based funds only", value=False, key="utah_only")
+    utah_only = st.checkbox("Utah-based funds", value=False, key="utah_only")
     
     # Build allowed stages list
     allowed_stages = []
@@ -619,6 +632,8 @@ def main():
         allowed_stages.append("III")
     if stage_iv:
         allowed_stages.append("IV")
+    if stage_v_plus:
+        allowed_stages.append("V+")
 
     # Dynamic year filter
     current_year = datetime.now().year
@@ -631,11 +646,18 @@ def main():
     )
 
     industry_group_fixed = "Pooled Investment Fund"
-    industry_subtype = st.selectbox(
-        "Industry Subtype (Pooled Investment Fund only)",
-        ["Any", "Private Equity Fund", "Hedge Fund", "Venture Capital Fund", "Other Investment Fund", "Private Credit/Debt Fund"],
-        index=1
-    )
+    
+    # Fund Type dropdown with help text
+    col_fund_type, col_help = st.columns([3, 1])
+    with col_fund_type:
+        industry_subtype = st.selectbox(
+            "Fund Type",
+            ["Any", "Private Equity Fund", "Hedge Fund", "Venture Capital Fund", "Private Credit Fund", "Other Investment Fund"],
+            index=1
+        )
+    with col_help:
+        if industry_subtype == "Private Credit Fund":
+            st.markdown("ℹ️", help="Uses keyword detection to identify credit-focused funds filed as 'Other Investment Fund'")
 
     # Buttons row
     col_btn1, col_btn2 = st.columns([1, 4])
@@ -651,12 +673,9 @@ def main():
 
     # Combined search and filter
     if search_button:
-        if not allowed_stages:
-            st.warning("Please select at least one Fund Stage.")
-        else:
-            # Fetch filings
-            with st.spinner("Fetching Form D filings..."):
-                filings = fetch_sec_filings(start_date, end_date, page_size=200, max_pages=150)
+        # Fetch filings
+        with st.spinner("Fetching Form D filings..."):
+            filings = fetch_sec_filings(start_date, end_date, page_size=200, max_pages=150)
             
             if filings:
                 total_fetched = len(filings)
@@ -664,10 +683,10 @@ def main():
                 
                 detailed_data = []
 
-                # Map "Private Credit/Debt Fund" to "Other Investment Fund" for SEC filter
+                # Map "Private Credit Fund" to "Other Investment Fund" for SEC filter
                 if industry_subtype == "Any":
                     subtype_filter = None
-                elif industry_subtype == "Private Credit/Debt Fund":
+                elif industry_subtype == "Private Credit Fund":
                     subtype_filter = "Other Investment Fund"
                 else:
                     subtype_filter = industry_subtype
@@ -702,7 +721,7 @@ def main():
                         required_industry_group=industry_group_fixed,
                         required_subtype=subtype_filter,
                         allowed_years=allowed_years,
-                        allowed_stages=allowed_stages,
+                        allowed_stages=allowed_stages if allowed_stages else None,
                         min_fund_size=min_fund_size,
                         max_fund_size=max_fund_size
                     )
@@ -729,24 +748,35 @@ def main():
                     st.session_state["last_search_time"] = datetime.now()
                     
                     year_display = ", ".join(selected_years) if selected_years else "All years"
-                    stages_display = ", ".join([s if s != "N/A" else "N/A (Unknown)" for s in allowed_stages])
+                    stages_display = ", ".join([s if s != "N/A" else "N/A (Unknown)" for s in allowed_stages]) if allowed_stages else "All stages"
                     st.success(f"✅ Found {len(detailed_data):,} matching funds ({industry_subtype if industry_subtype != 'Any' else 'Any subtype'}, Stages: {stages_display}, Years: {year_display}, Size: ${min_size}M-${max_size}M)")
                     
                     # Show last updated timestamp
                     if st.session_state["last_search_time"]:
-                        timestamp = st.session_state["last_search_time"].strftime("%b %d, %Y at %I:%M %p")
+                        # Convert to Mountain Time
+                        utc_time = st.session_state["last_search_time"]
+                        mountain = pytz.timezone('America/Denver')
+                        utc_time = pytz.utc.localize(utc_time) if utc_time.tzinfo is None else utc_time
+                        mountain_time = utc_time.astimezone(mountain)
+                        timestamp = mountain_time.strftime("%m/%d/%Y at %I:%M %p MST")
                         st.caption(f"Last Updated: {timestamp}")
                     
                     # Create main view DataFrame
                     main_df = create_main_view_df(detailed_data)
                     
-                    # Add Google search links to Fund Name column
-                    def make_clickable(name):
-                        url = f"https://www.google.com/search?q={quote(name)}"
+                    # Add SEC Form D links to Fund Name column
+                    def make_clickable(row_data):
+                        name = row_data['Fund Name']
+                        cik = row_data.get('CIK', '')
+                        acc = row_data.get('Accession Number', '').replace("-", "")
+                        primary_doc = row_data.get('Primary Document', f"{acc}.txt")
+                        url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{primary_doc}"
                         return f'<a href="{url}" target="_blank">{name}</a>'
                     
+                    # Create full dataframe for linking
+                    full_df_with_tech = pd.DataFrame(detailed_data)
                     main_df_display = main_df.copy()
-                    main_df_display['Fund Name'] = main_df_display['Fund Name'].apply(make_clickable)
+                    main_df_display['Fund Name'] = full_df_with_tech.apply(make_clickable, axis=1)
                     
                     # Display with HTML rendering for clickable links
                     st.write(main_df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
