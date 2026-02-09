@@ -199,11 +199,16 @@ def format_currency(amount):
 # =========================
 # Data fetch & parsing
 # =========================
-def _request_search(params, retries=2, timeout=30):
+def _request_search(params, retries=2, timeout=30, show_rate_limit_msg=True):
     """Internal: call SEC search API with light retry/backoff for 429s."""
     for attempt in range(retries + 1):
         resp = requests.get(URL, headers=HEADERS, params=params, timeout=timeout)
         if resp.status_code == 429 and attempt < retries:
+            # Show friendly one-time message about rate limiting
+            if show_rate_limit_msg and "rate_limit_shown" not in st.session_state:
+                st.info("ℹ️ Processing large date range - SEC requesting slower queries. Automatically adjusting... (this is normal)")
+                st.session_state["rate_limit_shown"] = True
+            
             retry_after = min(int(resp.headers.get("Retry-After", "1")), 5)
             time.sleep(retry_after)
             continue
@@ -845,6 +850,10 @@ def main():
 
     # Combined search and filter
     if search_button:
+        # Reset rate limit message flag for this search
+        if "rate_limit_shown" in st.session_state:
+            del st.session_state["rate_limit_shown"]
+        
         # Progress tracking
         progress_placeholder = st.empty()
         chunk_status = st.empty()
@@ -975,19 +984,16 @@ def main():
                 # Create main view DataFrame
                 main_df = create_main_view_df(detailed_data)
                 
-                # Add SEC Form D links to Fund Name column
-                def make_clickable(row_data):
+                # Add Google search links to Fund Name column in main table
+                def make_clickable_google(row_data):
                     name = row_data['Fund Name']
-                    cik = row_data.get('CIK', '')
-                    acc = row_data.get('Accession Number', '').replace("-", "")
-                    primary_doc = row_data.get('Primary Document', f"{acc}.txt")
-                    url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{primary_doc}"
-                    return f'<a href="{url}" target="_blank">{name}</a>'
+                    google_url = f"https://www.google.com/search?q={quote(name)}"
+                    return f'<a href="{google_url}" target="_blank">{name}</a>'
                 
                 # Create full dataframe for linking
                 full_df_with_tech = pd.DataFrame(detailed_data)
                 main_df_display = main_df.copy()
-                main_df_display['Fund Name'] = full_df_with_tech.apply(make_clickable, axis=1)
+                main_df_display['Fund Name'] = full_df_with_tech.apply(make_clickable_google, axis=1)
                 
                 # Display with HTML rendering for clickable links
                 st.write(main_df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
