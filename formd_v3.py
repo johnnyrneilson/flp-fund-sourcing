@@ -308,8 +308,7 @@ def fetch_with_auto_chunking(start_date, end_date, progress_callback=None):
     
     Chunking strategy:
     - < 7 days: No chunking (single query)
-    - 7-30 days: 3-day chunks
-    - 30+ days: 7-day chunks
+    - 7+ days: 3-day chunks (to avoid 100-result caps per chunk)
     """
     # Convert to datetime objects if needed
     if not isinstance(start_date, datetime):
@@ -324,12 +323,9 @@ def fetch_with_auto_chunking(start_date, end_date, progress_callback=None):
     if date_range_days < 7:
         # Short range: no chunking
         chunk_days = date_range_days
-    elif date_range_days <= 30:
-        # Medium range: 3-day chunks
-        chunk_days = 3
     else:
-        # Long range: 7-day chunks
-        chunk_days = 7
+        # 7+ days: use 3-day chunks to avoid SEC limits
+        chunk_days = 3
     
     # Create chunks
     chunks = []
