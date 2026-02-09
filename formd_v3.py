@@ -19,8 +19,8 @@ def convert_df_to_csv(df):
 URL = "https://efts.sec.gov/LATEST/search-index"
 
 # Use a descriptive UA per SEC guidance (name + email). Avoid browser-y UAs here.
-YOUR_NAME = "Johnny Neilson"
-YOUR_EMAIL = "johnralphneilson@gmail.com"
+YOUR_NAME = "Fund Launch Partners Acquisitions"
+YOUR_EMAIL = "acquisitions@fundlaunchpartners.com"
 
 HEADERS = {
     "User-Agent": f"{YOUR_NAME} FormD Scraper ({YOUR_EMAIL})",
