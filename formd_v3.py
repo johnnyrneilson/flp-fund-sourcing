@@ -5,9 +5,13 @@ from openai import OpenAI
 import xml.etree.ElementTree as ET
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from urllib.parse import quote
+import json
+
+# Set page to wide mode
+st.set_page_config(layout="wide", page_title="FLP - Emerging Manager Sourcing")
 
 
 def convert_df_to_csv(df):
@@ -209,6 +213,148 @@ def _request_search(params, retries=2, timeout=30):
 
 
 def fetch_sec_filings(start_date, end_date, page_size=200, max_pages=150):
+    """
+    Fetch SEC Form D filings between two dates, across pages.
+    Includes a compatibility fallback if a paged call returns empty.
+    """
+    start_str = start_date.strftime("%Y-%m-%d") if hasattr(start_date, "strftime") else str(start_date)
+    end_str = end_date.strftime("%Y-%m-%d") if hasattr(end_date, "strftime") else str(end_date)
+
+    if start_str > end_str:
+        st.warning("Start Date is after End Date.")
+        return []
+
+    base_params = {
+        "dateRange": "custom",
+        "startdt": start_str,
+        "enddt": end_str,
+        "forms": "D",
+    }
+
+    all_results = []
+    pages = 0
+    offset = 0
+    
+    # Debug: Track if we're actually paginating
+    fetched_first_page = False
+    
+    while pages < max_pages:
+        params = dict(base_params)
+        params.update({
+            "from": offset,
+            "size": page_size,
+            "sort": "file_date:desc"
+        })
+
+        try:
+            data = _request_search(params)
+        except requests.RequestException as e:
+            st.error(f"Request failed at offset {offset}: {e}")
+            break
+        if not data:
+            break
+
+        page_results = clean_up(data)
+        total_field = data.get("hits", {}).get("total", 0)
+        total = total_field.get("value", 0) if isinstance(total_field, dict) else int(total_field or 0)
+        
+        # Debug output on first page only
+        if not fetched_first_page and page_results:
+            fetched_first_page = True
+            # This will show in logs but not disrupt user
+
+        if not page_results:
+            if offset == 0:
+                fallback_params = dict(base_params)
+                try:
+                    fallback_data = _request_search(fallback_params)
+                except requests.RequestException as e:
+                    st.error(f"Fallback request failed: {e}")
+                    break
+                if not fallback_data:
+                    break
+
+                first_results = clean_up(fallback_data)
+                if not first_results:
+                    break
+                all_results.extend(first_results)
+
+                offset = len(first_results)
+                total_field_fb = fallback_data.get("hits", {}).get("total", 0)
+                total_fb = total_field_fb.get("value", 0) if isinstance(total_field_fb, dict) else int(total_field_fb or 0)
+                total = max(total, total_fb)
+
+                if offset >= total:
+                    break
+
+                pages += 1
+                continue
+            else:
+                break
+
+        all_results.extend(page_results)
+        offset += page_size
+        pages += 1
+
+        if offset >= total:
+            break
+
+    return all_results
+
+
+def fetch_with_auto_chunking(start_date, end_date, progress_callback=None):
+    """
+    Automatically chunk large date ranges to avoid SEC API limits.
+    
+    Chunking strategy:
+    - < 7 days: No chunking (single query)
+    - 7-30 days: 3-day chunks
+    - 30+ days: 7-day chunks
+    """
+    # Convert to datetime objects if needed
+    if not isinstance(start_date, datetime):
+        start_date = datetime.strptime(str(start_date), "%Y-%m-%d")
+    if not isinstance(end_date, datetime):
+        end_date = datetime.strptime(str(end_date), "%Y-%m-%d")
+    
+    # Calculate date range in days
+    date_range_days = (end_date - start_date).days + 1
+    
+    # Determine chunk size
+    if date_range_days < 7:
+        # Short range: no chunking
+        chunk_days = date_range_days
+    elif date_range_days <= 30:
+        # Medium range: 3-day chunks
+        chunk_days = 3
+    else:
+        # Long range: 7-day chunks
+        chunk_days = 7
+    
+    # Create chunks
+    chunks = []
+    current_start = start_date
+    while current_start <= end_date:
+        current_end = min(current_start + timedelta(days=chunk_days - 1), end_date)
+        chunks.append((current_start, current_end))
+        current_start = current_end + timedelta(days=1)
+    
+    # Fetch each chunk
+    all_filings = []
+    total_chunks = len(chunks)
+    
+    for idx, (chunk_start, chunk_end) in enumerate(chunks):
+        if progress_callback:
+            progress_callback(idx + 1, total_chunks, chunk_start, chunk_end)
+        
+        chunk_filings = fetch_sec_filings(chunk_start, chunk_end)
+        all_filings.extend(chunk_filings)
+        
+        # Small delay between chunks to be respectful to SEC API
+        if idx < total_chunks - 1:
+            time.sleep(0.5)
+    
+    return all_filings, total_chunks
     """
     Fetch SEC Form D filings between two dates, across pages.
     Includes a compatibility fallback if a paged call returns empty.
@@ -579,6 +725,33 @@ def main():
     
     st.title('Emerging Manager Sourcing (Form D)')
     
+    # Recent Searches section
+    with st.expander("🔍 Recent Searches"):
+        if "search_history" not in st.session_state:
+            st.session_state["search_history"] = []
+        
+        if st.session_state["search_history"]:
+            for idx, search in enumerate(st.session_state["search_history"][-10:]):  # Show last 10
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.markdown(f"""
+                    **📅 {search['start_date']} to {search['end_date']}**  
+                    Fund Type: {search['fund_type']} | Stages: {search['stages']} | Size: ${search['min_size']}M-${search['max_size']}M  
+                    ✅ {search['results_count']} results | {search['timestamp']}
+                    """)
+                with col2:
+                    if st.button("↻ Re-run", key=f"rerun_{idx}"):
+                        # Auto-fill the filters with this search
+                        st.session_state["prefill_search"] = search
+                        st.rerun()
+                st.markdown("---")
+            
+            if st.button("🗑️ Clear All History"):
+                st.session_state["search_history"] = []
+                st.rerun()
+        else:
+            st.info("No recent searches yet. Run a search to see it here!")
+    
     # User-Agent collapsible info
     with st.expander("ℹ️ SEC Compliance Information"):
         st.write(f"""
@@ -676,9 +849,20 @@ def main():
 
     # Combined search and filter
     if search_button:
-        # Fetch filings
+        # Progress tracking
+        progress_placeholder = st.empty()
+        chunk_status = st.empty()
+        
+        # Fetch filings with auto-chunking
+        def update_progress(current_chunk, total_chunks, chunk_start, chunk_end):
+            progress_placeholder.progress(current_chunk / total_chunks)
+            chunk_status.info(f"📥 Fetching chunk {current_chunk} of {total_chunks}: {chunk_start.strftime('%m/%d/%Y')} to {chunk_end.strftime('%m/%d/%Y')}")
+        
         with st.spinner("Fetching Form D filings from SEC..."):
-            filings = fetch_sec_filings(start_date, end_date, page_size=200, max_pages=150)
+            filings, num_chunks = fetch_with_auto_chunking(start_date, end_date, update_progress)
+        
+        progress_placeholder.empty()
+        chunk_status.empty()
         
         if filings:
             total_fetched = len(filings)
@@ -756,17 +940,39 @@ def main():
                 # Store timestamp
                 st.session_state["last_search_time"] = datetime.now()
                 
+                # Save to search history
+                mountain = pytz.timezone('America/Denver')
+                utc_time = pytz.utc.localize(st.session_state["last_search_time"]) if st.session_state["last_search_time"].tzinfo is None else st.session_state["last_search_time"]
+                mountain_time = utc_time.astimezone(mountain)
+                
+                search_record = {
+                    'start_date': str(start_date),
+                    'end_date': str(end_date),
+                    'fund_type': industry_subtype,
+                    'stages': ', '.join([s for s in allowed_stages]) if allowed_stages else 'All',
+                    'min_size': min_size,
+                    'max_size': max_size,
+                    'results_count': len(detailed_data),
+                    'timestamp': mountain_time.strftime("%m/%d/%Y %I:%M %p MST")
+                }
+                
+                # Add to history (keep last 50)
+                if "search_history" not in st.session_state:
+                    st.session_state["search_history"] = []
+                st.session_state["search_history"].append(search_record)
+                st.session_state["search_history"] = st.session_state["search_history"][-50:]  # Keep last 50
+                
                 year_display = ", ".join(selected_years) if selected_years else "All years"
                 stages_display = ", ".join([s if s != "N/A" else "N/A (Unknown)" for s in allowed_stages]) if allowed_stages else "All stages"
-                st.success(f"✅ Found {len(detailed_data):,} matching funds ({industry_subtype if industry_subtype != 'Any' else 'Any subtype'}, Stages: {stages_display}, Years: {year_display}, Size: ${min_size}M-${max_size}M)")
+                
+                # Show info about chunking if multiple chunks were used
+                if num_chunks > 1:
+                    st.success(f"✅ Found {len(detailed_data):,} matching funds from {total_fetched:,} filings across {num_chunks} date chunks ({industry_subtype if industry_subtype != 'Any' else 'Any subtype'}, Stages: {stages_display}, Years: {year_display}, Size: ${min_size}M-${max_size}M)")
+                else:
+                    st.success(f"✅ Found {len(detailed_data):,} matching funds ({industry_subtype if industry_subtype != 'Any' else 'Any subtype'}, Stages: {stages_display}, Years: {year_display}, Size: ${min_size}M-${max_size}M)")
                 
                 # Show last updated timestamp
                 if st.session_state["last_search_time"]:
-                    # Convert to Mountain Time
-                    utc_time = st.session_state["last_search_time"]
-                    mountain = pytz.timezone('America/Denver')
-                    utc_time = pytz.utc.localize(utc_time) if utc_time.tzinfo is None else utc_time
-                    mountain_time = utc_time.astimezone(mountain)
                     timestamp = mountain_time.strftime("%m/%d/%Y at %I:%M %p MST")
                     st.caption(f"Last Updated: {timestamp}")
                 
